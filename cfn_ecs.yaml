@@ -7,12 +7,17 @@ Parameters:
     Type: AWS::EC2::Subnet::Id
   SubnetB:
     Type: AWS::EC2::Subnet::Id
-  Image:
+  SubnetC:
+    Type: AWS::EC2::Subnet::Id
+  SubnetD:
+    Type: AWS::EC2::Subnet::Id
+  RestApiImage:
+    Type: String
+  FrontendImage:
     Type: String
   ServiceName:
     Type: String
-    # update with the name of the service
-  ContainerPort:
+  RestApiPort:
     Type: Number
     Default: 8080
   LoadBalancerPort:
@@ -24,7 +29,7 @@ Parameters:
   # for autoscaling
   MinContainers:
     Type: Number
-    Default: 2
+    Default: 3
   # for autoscaling
   MaxContainers:
     Type: Number
@@ -54,10 +59,14 @@ Resources:
       ExecutionRoleArn: !Ref ExecutionRole
       TaskRoleArn: !Ref TaskRole
       ContainerDefinitions:
-        - Name: !Ref ServiceName
-          Image: !Ref Image
+        - Name: RestApi
+          Image: !Ref RestApiImage
           PortMappings:
-            - ContainerPort: !Ref ContainerPort
+            - ContainerPort: !Ref RestApiPort
+        - Name: Frontend
+          Image: !Ref FrontendImage
+          PortMappings:
+            - ContainerPort: !Ref LoadBalancerPort
           # Send logs to CloudWatch Logs
           LogConfiguration:
             LogDriver: awslogs
@@ -106,20 +115,41 @@ Resources:
             Action: 'sts:AssumeRole'
       ManagedPolicyArns:
         - 'arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceAutoscaleRole'
-  ContainerSecurityGroup:
+  RestApiSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: !Join ['', [!Ref ServiceName, ContainerSecurityGroup]]
+      GroupDescription: !Join ['', [!Ref ServiceName, RestApiSecurityGroup]]
       VpcId: !Ref VPC
       SecurityGroupIngress:
         - IpProtocol: tcp
-          FromPort: !Ref ContainerPort
-          ToPort: !Ref ContainerPort
+          FromPort: !Ref RestApiPort
+          ToPort: !Ref RestApiPort
           SourceSecurityGroupId: !Ref LoadBalancerSecurityGroup
   LoadBalancerSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupDescription: !Join ['', [!Ref ServiceName, LoadBalancerSecurityGroup]]
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: !Ref LoadBalancerPort
+          ToPort: !Ref LoadBalancerPort
+          CidrIp: 0.0.0.0/0
+  FrontendSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Join ['', [!Ref ServiceName, FrontendSecurityGroup]]
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: !Ref LoadBalancerPort
+          ToPort: !Ref LoadBalancerPort
+          SourceSecurityGroupId: !Ref FrontendLoadBalancerSecurityGroup
+
+  FrontendLoadBalancerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Join ['', [!Ref ServiceName, FrontendLoadBalancerSecurityGroup]]
       VpcId: !Ref VPC
       SecurityGroupIngress:
         - IpProtocol: tcp
@@ -138,7 +168,6 @@ Resources:
         MinimumHealthyPercent: 100
         MaximumPercent: 200
       DesiredCount: 3
-  
       HealthCheckGracePeriodSeconds: 30
       LaunchType: FARGATE
       NetworkConfiguration: 
@@ -148,11 +177,16 @@ Resources:
             - !Ref SubnetA
             - !Ref SubnetB
           SecurityGroups:
-            - !Ref ContainerSecurityGroup
+            - !Ref RestApiSecurityGroup
+            - !Ref FrontendSecurityGroup
       LoadBalancers:
-        - ContainerName: !Ref ServiceName
-          ContainerPort: !Ref ContainerPort
+ #       - ContainerName: !Ref ServiceName
+        - ContainerName: RestApi
+          ContainerPort: !Ref RestApiPort
           TargetGroupArn: !Ref TargetGroup
+        - ContainerName: Frontend
+          ContainerPort: !Ref LoadBalancerPort
+          TargetGroupArn: !Ref FrontendTargetGroup
   TargetGroup:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Properties:
@@ -163,7 +197,7 @@ Resources:
       UnhealthyThresholdCount: 2
       HealthyThresholdCount: 2
       Name: !Join ['', [!Ref ServiceName, TargetGroup]]
-      Port: !Ref ContainerPort
+      Port: !Ref RestApiPort
       Protocol: HTTP
       TargetGroupAttributes:
         - Key: deregistration_delay.timeout_seconds
@@ -180,19 +214,58 @@ Resources:
       Port: !Ref LoadBalancerPort
       Protocol: HTTP
 
-  AppLoadBalancer:
+  LoadBalancer:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
     Properties:
       LoadBalancerAttributes:
         - Key: idle_timeout.timeout_seconds
           Value: 60
-      Name: !Join ['', [!Ref ServiceName, AppLoadBalancer]]
+      Name: !Join ['', [!Ref ServiceName, LoadBalancer]]
       Scheme: internet-facing
       SecurityGroups:
         - !Ref LoadBalancerSecurityGroup
       Subnets:
         - !Ref SubnetA
         - !Ref SubnetB
+  ClientLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      LoadBalancerAttributes:
+        - Key: idle_timeout.timeout_seconds
+          Value: 60
+      Name: !Join ['', [!Ref ServiceName, ClientLoadBalancer]]
+      Scheme: internet-facing
+      SecurityGroups:
+        - !Ref FrontendLoadBalancerSecurityGroup
+      Subnets:
+        - !Ref SubnetC
+        - !Ref SubnetD
+  FrontendTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckIntervalSeconds: 10
+      # will look for a 200 status code by default unless specified otherwise
+      HealthCheckPath: /CheckPath
+      HealthCheckTimeoutSeconds: 5
+      UnhealthyThresholdCount: 2
+      HealthyThresholdCount: 2
+      Name: !Join ['', [!Ref ServiceName, FrontendTargetGroup]]
+      Port: !Ref LoadBalancerPort
+      Protocol: HTTP
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: 60 # default is 300
+      TargetType: ip
+      VpcId: !Ref VPC
+  ClientListenerHTTP:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - TargetGroupArn: !Ref FrontendTargetGroup
+          Type: forward
+      LoadBalancerArn: !Ref ClientLoadBalancer
+      Port: !Ref LoadBalancerPort
+      Protocol: HTTP
   LogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
@@ -221,4 +294,7 @@ Resources:
 Outputs:
   AlbURL:
     Description: The URL of the Application Load Balancer
-    Value: !GetAtt AppLoadBalancer.DNSName
+    Value: !GetAtt [ LoadBalancer, DNSName ]
+  AlbURLFrontend:
+    Description: The URL of the Application Load Balancer
+    Value: !GetAtt [ ClientLoadBalancer, DNSName ]
