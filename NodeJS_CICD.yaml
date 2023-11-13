@@ -1,245 +1,208 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+Description: The template used to create an ECS Cluster from the ECS Console.
 Parameters:
-  Vpc:
-    Type: 'AWS::EC2::VPC::Id'
-  Subnet1:
-    Type: 'AWS::EC2::Subnet::Id'
-  Subnet2:
-    Type: 'AWS::EC2::Subnet::Id'
+  VPC:
+    Type: AWS::EC2::VPC::Id
+  SubnetA:
+    Type: AWS::EC2::Subnet::Id
+  SubnetB:
+    Type: AWS::EC2::Subnet::Id
+  SubnetC:
+    Type: AWS::EC2::Subnet::Id
+  ContainerPort:
+    Type: Number
+    Default: 8080
+  RestApiImage:
+    Type: String
+  ECSClusterName:
+    Type: String
+    Description: Specifies the ECS Cluster Name with which the resources would be
+      associated
+    Default: NodeApp
   ServiceName:
     Type: String
     Default: EcsDemo
-Transform:
-  - 'AWS::CodeDeployBlueGreen'
-Hooks:
-  CodeDeployBlueGreenHook:
-    Properties:
-      ServiceName: ECSDemoService
-      TrafficRoutingConfig:
-        Type: TimeBasedCanary
-        TimeBasedCanary:
-          StepPercentage: 15
-          BakeTimeMins: 5
-      Applications:
-        - Target:
-            Type: 'AWS::ECS::Service'
-            ServiceName: ECSDemoService
-          ECSAttributes:
-            ServiceName: ECSDemoService
-            TaskDefinitions:
-              - BlueTaskDefinition
-              - GreenTaskDefinition
-            TaskSets:
-              - BlueTaskSet
-              - GreenTaskSet
-            TrafficRouting:
-              ProdTrafficRoute:
-                Type: 'AWS::ElasticLoadBalancingV2::Listener'
-                LogicalID: ALBListenerProdTraffic
-              TargetGroups:
-                - ALBTargetGroupBlue
-                - ALBTargetGroupGreen
+  LoadBalancerPort:
+    Type: Number
+    Default: 80
+  HealthCheckPath:
+    Type: String
+    Default: /healthcheck
 
-    Type: 'AWS::CodeDeploy::BlueGreen'
+
 Resources:
-  ExampleSecurityGroup:
-    Type: 'AWS::EC2::SecurityGroup'
-    Properties:
-      GroupDescription: Security group for ec2 access
-      VpcId: !Ref Vpc
-      SecurityGroupIngress:
-        - IpProtocol: tcp
-          FromPort: 8080
-          ToPort: 8080
-          SourceSecurityGroupId: !Ref ClusterSecurityGroup
-  TaskRole:
-    Type: AWS::IAM::Role
-    Properties:
-      RoleName: TaskRoleDemo
-      AssumeRolePolicyDocument:
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: ecs-tasks.amazonaws.com
-            Action: 'sts:AssumeRole'
-# alb sg
-  ClusterSecurityGroup:
-    Type: 'AWS::EC2::SecurityGroup'
-    Properties:
-      GroupDescription: ALB SECURITY GROUP
-      VpcId: !Ref Vpc
-      SecurityGroupIngress:
-        - IpProtocol: tcp
-          FromPort: 80
-          ToPort: 80
-          CidrIp: 0.0.0.0/0
-
-  ALBTargetGroupBlue:
-    Type: 'AWS::ElasticLoadBalancingV2::TargetGroup'
-    Properties:
-      HealthCheckIntervalSeconds: 5
-      HealthCheckPath: /
-      HealthCheckPort: '80'
-      HealthCheckProtocol: HTTP
-      HealthCheckTimeoutSeconds: 2
-      HealthyThresholdCount: 2
-      Matcher:
-        HttpCode: '200'
-      Port: 80
-      Protocol: HTTP
-      Tags:
-        - Key: Group
-          Value: Example
-      TargetType: ip
-      UnhealthyThresholdCount: 4
-      VpcId: !Ref Vpc
-  ALBTargetGroupGreen:
-    Type: 'AWS::ElasticLoadBalancingV2::TargetGroup'
-    Properties:
-      HealthCheckIntervalSeconds: 5
-      HealthCheckPath: /
-      HealthCheckPort: '80'
-      HealthCheckProtocol: HTTP
-      HealthCheckTimeoutSeconds: 2
-      HealthyThresholdCount: 2
-      Matcher:
-        HttpCode: '200'
-      Port: 80
-      Protocol: HTTP
-      Tags:
-        - Key: Group
-          Value: Example
-      TargetType: ip
-      UnhealthyThresholdCount: 4
-      VpcId: !Ref Vpc
-  ALBalancer:
-    Type: 'AWS::ElasticLoadBalancingV2::LoadBalancer'
-    Properties:
-      Scheme: internet-facing
-      SecurityGroups:
-        - !Ref ClusterSecurityGroup
-      Subnets:
-        - !Ref Subnet1
-        - !Ref Subnet2
-      Tags:
-        - Key: Group
-          Value: Example
-      Type: application
-      IpAddressType: ipv4
-  ALBListenerProdTraffic:
-    Type: 'AWS::ElasticLoadBalancingV2::Listener'
-    Properties:
-      DefaultActions:
-        - Type: forward
-          ForwardConfig:
-            TargetGroups:
-              - TargetGroupArn: !Ref ALBTargetGroupBlue
-                Weight: 1
-      LoadBalancerArn: !Ref ALBalancer
-      Port: 80
-      Protocol: HTTP
-  ALBListenerProdRule:
-    Type: 'AWS::ElasticLoadBalancingV2::ListenerRule'
-    Properties:
-      Actions:
-        - Type: forward
-          ForwardConfig:
-            TargetGroups:
-              - TargetGroupArn: !Ref ALBTargetGroupBlue
-                Weight: 1
-      Conditions:
-        - Field: http-header
-          HttpHeaderConfig:
-            HttpHeaderName: User-Agent
-            Values:
-              - Mozilla
-      ListenerArn: !Ref ALBListenerProdTraffic
-      Priority: 1
-  ECSTaskExecutionRole:
-    Type: 'AWS::IAM::Role'
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: 2012-10-17
-        Statement:
-          - Sid: ''
-            Effect: Allow
-            Principal:
-              Service: ecs-tasks.amazonaws.com
-            Action: 'sts:AssumeRole'
-      ManagedPolicyArns:
-        - 'arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy'
-  BlueTaskDefinition:
-    Type: 'AWS::ECS::TaskDefinition'
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
     DependsOn: LogGroup
-    Properties: 
-      ExecutionRoleArn: !Ref ECSTaskExecutionRole
+    Properties:
+      ExecutionRoleArn: !Ref ExecutionRole
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      Cpu: 1
+      Memory: 3GB
       TaskRoleArn: !Ref TaskRole
+      Family: !Join ['', [!Ref ServiceName, TaskDefinition]]
       ContainerDefinitions:
-        - Name: DemoApp
-          Image: '473019654406.dkr.ecr.eu-west-1.amazonaws.com/nodedesktopdemo'
-          Essential: true
+        - Name: RestApi
+          Image: !Ref RestApiImage
           PortMappings:
-            - HostPort: 8080
-              Protocol: tcp
-              ContainerPort: 8080
+            - ContainerPort: !Ref ContainerPort
+          # Send logs to CloudWatch Logs
           LogConfiguration:
             LogDriver: awslogs
             Options:
               awslogs-region: !Ref AWS::Region
               awslogs-group: !Ref LogGroup
               awslogs-stream-prefix: ecs
-      RequiresCompatibilities:
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Ref ServiceName
+      CapacityProviders:
         - FARGATE
-      NetworkMode: awsvpc
-      Cpu: '256'
-      Memory: '512'
+        - FARGATE_SPOT
+      ClusterSettings:
+        - Name: containerInsights
+          Value: disabled
+      Configuration:
+          ExecuteCommandConfiguration:
+            Logging: DEFAULT
+      ServiceConnectDefaults:
+          Namespace: NodeApp
+      Tags: []
+    # A role needed by ECS
+  ExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Join ['', [!Ref ServiceName, ExecutionRole]]
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy'
+  # A role for the containers
+  TaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Join ['', [!Ref ServiceName, TaskRole]]
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: 'sts:AssumeRole'
+           
+  ECSService:
+    Type: AWS::ECS::Service
+    DependsOn:
+      - ListenerHTTP
+    Properties:
+      Cluster: !Ref ECSCluster
+      TaskDefinition: !Ref TaskDefinition
+      LaunchType: FARGATE
+      ServiceName: !Join ['', [!Ref ServiceName, ECSService]] # added
+      SchedulingStrategy: REPLICA
+      DesiredCount: 2
+      LoadBalancers:
+        - ContainerName: RestApi
+          ContainerPort: !Ref ContainerPort
+          TargetGroupArn: !Ref TargetGroup
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          SecurityGroups:
+            - !Ref RestApiSecurityGroup
+          Subnets:
+            - !Ref SubnetA
+            - !Ref SubnetB
+            - !Ref SubnetC
+      PlatformVersion: LATEST
+      DeploymentConfiguration:
+        MaximumPercent: 200
+        MinimumHealthyPercent: 100
+        DeploymentCircuitBreaker:
+          Enable: true
+          Rollback: true
+      DeploymentController:
+        Type: ECS
+      ServiceConnectConfiguration:
+        Enabled: false
+      Tags: []
+      EnableECSManagedTags: true
+
+  RestApiSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Join ['', [!Ref ServiceName, RestApiSecurityGroup]]
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: !Ref ContainerPort
+        ToPort: !Ref ContainerPort
+        SourceSecurityGroupId: !Ref LoadBalancerSecurityGroup
+
+  LoadBalancerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Join ['', [!Ref ServiceName, LoadBalancerSecurityGroup]]
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: !Ref LoadBalancerPort
+        ToPort: !Ref LoadBalancerPort
+        CidrIp: 0.0.0.0/0
+      # DependsOn:
+      # - ListenerHTTP
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckIntervalSeconds: 60
+      # will look for a 200 status code by default unless specified otherwise
+      HealthCheckPath: !Ref HealthCheckPath
+      HealthCheckTimeoutSeconds: 30
+      UnhealthyThresholdCount: 5
+      HealthyThresholdCount: 5
+      Name: !Join ['', [!Ref ServiceName, TargetGroup]]
+      Port: !Ref LoadBalancerPort
+      Protocol: HTTP
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: 60 # default is 300
+      TargetType: ip
+      VpcId: !Ref VPC
+  ListenerHTTP:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - TargetGroupArn: !Ref TargetGroup
+          Type: forward
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: !Ref LoadBalancerPort
+      Protocol: HTTP
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      LoadBalancerAttributes:
+        - Key: idle_timeout.timeout_seconds
+          Value: 60
+      Name: !Join ['', [!Ref ServiceName, LoadBalancer]]
+      Scheme: internet-facing
+      SecurityGroups:
+        - !Ref LoadBalancerSecurityGroup
+      Subnets:
+        - !Ref SubnetA
+        - !Ref SubnetB
+        - !Ref SubnetC
   LogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Join ['', [/ecs/, !Ref ServiceName, TaskDefinition]]
-  ECSDemoCluster:
-    Type: 'AWS::ECS::Cluster'
-    Properties: {}
-     
-  ECSDemoService:
-    Type: 'AWS::ECS::Service'
-    Properties:
-      Cluster: !Ref ECSDemoCluster
-      DesiredCount: 2
-      DeploymentController:
-        Type: EXTERNAL
-      ServiceName: !Ref ServiceName
-  BlueTaskSet:
-    Type: 'AWS::ECS::TaskSet'
-    Properties:
-      Service: !Ref ECSDemoService
-      Cluster: !Ref ECSDemoCluster
-      LaunchType: FARGATE
-      NetworkConfiguration:
-        AwsVpcConfiguration:
-          AssignPublicIp: ENABLED
-          SecurityGroups:
-            - !Ref ExampleSecurityGroup
-          Subnets:
-            - !Ref Subnet1
-            - !Ref Subnet2
-      PlatformVersion: 1.4.0
-      Scale:
-        Unit: PERCENT
-        Value: 100
-      TaskDefinition: !Ref BlueTaskDefinition
-      LoadBalancers:
-        - ContainerName: DemoApp
-          ContainerPort: 8080
-          TargetGroupArn: !Ref ALBTargetGroupBlue
-  PrimaryTaskSet:
-    Type: 'AWS::ECS::PrimaryTaskSet'
-    Properties:
-      Cluster: !Ref ECSDemoCluster
-      Service: !Ref ECSDemoService
-      TaskSetId: !GetAtt 
-        - BlueTaskSet
-        - Id
 Outputs:
   AlbURL:
     Description: The URL of the Application Load Balancer
-    Value: !GetAtt [ ALBalancer, DNSName ]
+    Value: !GetAtt [ LoadBalancer, DNSName ]
